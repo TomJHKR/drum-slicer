@@ -9,7 +9,9 @@ import sys
 import pyaudio
 import random
 
-from tkinter import Tk, Label, Button,Radiobutton, IntVar
+from tkinter import Tk, Label, Button,Radiobutton, IntVar, ttk
+import ttkbootstrap as ttk
+from ttkbootstrap.constants import *
   
 """
   A simple class based on PyAudio to play wave loop.
@@ -114,8 +116,10 @@ class WavePlayerLoop(threading.Thread):
         if os.path.exists(self.temp_dir):
             shutil.rmtree(self.temp_dir)
 
-    def random(self):
+    def random(self,mast):
         random.shuffle(self.slices)
+        mast.rand_helper(self.slices)
+
         
 
     def get_audio_length(self):
@@ -136,24 +140,27 @@ class GUIObject:
         self.master.tk = tkObject  # Store Tk instance for later use
         self.num_slices = 16
         self.num_slicers = 16
+        
+        self.master.tk.style = ttk.Style()
+        self.master.tk.style.theme_use("superhero")
 
-         # Label to show GUI content
-        self.label = Label(self.master.tk, text="Slice Control")
-        self.label.pack()
+        # Label to show GUI content
+        self.label = ttk.Label(self.master.tk, text="Slice Control")
+        self.label.pack(pady=10)
 
 
 
         # Play button will call the 'play' method of master (WavePlayerLoop)
-        self.play_button = Button(self.master.tk, text="Play", command=self.play)
-        self.play_button.pack()
+        self.play_button = ttk.Button(self.master.tk, text="Play", command=self.play, bootstyle="success")
+        self.play_button.pack(pady=10)
 
         # Stop button will call the 'stop' method of master (WavePlayerLoop)
-        self.stop_button = Button(self.master.tk, text="Stop", command=self.stop)
-        self.stop_button.pack()
+        self.stop_button = ttk.Button(self.master.tk, text="Stop", command=self.stop, bootstyle="danger")
+        self.stop_button.pack(pady=10)
 
         # Randomise button
-        self.random_button = Button(self.master.tk, text="Random",command=self.random)
-        self.random_button.pack()
+        self.random_button = ttk.Button(self.master.tk, text="Random",command=self.random, bootstyle="primary")
+        self.random_button.pack(pady=10)
 
          # Create the grid of radio buttons
         self.radio_vars = [
@@ -163,6 +170,10 @@ class GUIObject:
 
         # Store the current player instance
         self.player = None
+    def setup_styles(self):
+        # Configure the style for the selected state of the radio buttons
+        self.master.tk.style.configure("TButton", background="#D1D8E0")
+        self.master.tk.style.configure("TButton.selected", background="#6D9EC1", foreground="white")
 
     def play(self):
         if self.player is None or not self.player.is_alive():
@@ -177,31 +188,34 @@ class GUIObject:
             print("Audio stopped.")
 
     def random(self):
-        self.player.random()
+        self.player.random(self)
+
+    def rand_helper(self,grid):
+        print(self.radio_vars)
+        for i, rad in enumerate(self.radio_vars):
+            rad.set(grid[i]) 
 
     def create_radio_grid(self):
         """Create a grid of radio buttons."""
-        grid_frame = Label(self.master.tk, text="Select Slices:")
-        grid_frame.pack()
+        grid_frame = ttk.LabelFrame(self.master.tk, text="Select Slices:", padding=10)
+        grid_frame.pack(pady=10)
 
         for col in range(self.num_slices):
             # Add a label for each column
-            Label(grid_frame, text=f"Slice {col + 1}").grid(row=0, column=col)
+            Label(grid_frame, text=f"{col + 1}").grid(row=0, column=col)
 
             # Create radio buttons for each row in the column
             for row in range(self.num_slicers, 0, -1):
                 rb = Radiobutton(
                     grid_frame,
-                    text=f"Row {row}",
                     variable=self.radio_vars[col],
                     value=row,
-                    indicatoron=1,
+                    indicatoron=True,
                     command=lambda c=col: self.on_radio_select(c),
                 )
-                rb.grid(row=self.num_slicers - row + 1, column=col, sticky="w")
+                rb.grid(row=self.num_slicers - row + 1, column=col, sticky="w",pady=2)
 
     def on_radio_select(self, col):
-        """Handle radio button selection."""
         selected_row = self.radio_vars[col].get()
         self.player.slices[col] = selected_row
         print(f"Column {col + 1}, selected Row: {selected_row}")
