@@ -23,6 +23,12 @@ class WavePlayerLoop(threading.Thread):
 
     CHUNK = 8192
 
+    ## Class Init
+    # filepath = filepath of sample
+    # loop = loop boolean wether to loop or not
+    # tempdir = filepath of tempdir where slices are saved to
+    # slices = array of slices
+    # beats = amount of slices
     def __init__(self,filepath,loop=True):
         super(WavePlayerLoop, self).__init__()
         self.filepath = os.path.abspath(filepath)
@@ -30,11 +36,11 @@ class WavePlayerLoop(threading.Thread):
         self.temp_dir = tempfile.mkdtemp()
         self.slices = self.slice_audio(16)
         self.beats = len(self.slices)
-
+    
+    ## Method to slice up the audio
+    ## Save to temp folder for each slice
+    ##
     def slice_audio(self, num_slices):
-        """
-        Slice the audio into `num_slices` parts and save them in a temporary directory.
-        """
         slices = []
         with wave.open(self.filepath, 'rb') as wf:
             # Get audio properties
@@ -61,15 +67,13 @@ class WavePlayerLoop(threading.Thread):
                     slice_wf.setsampwidth(wf.getsampwidth())
                     slice_wf.setframerate(wf.getframerate())
                     slice_wf.writeframes(frames)
-                print(i+1)
                 slices.append(i+1)
 
         return slices
+    
 
+    ## Initial play button
     def run(self):
-        """
-        Play the audio slices in sequence, looping if self.loop is True.
-        """
         player = pyaudio.PyAudio()
 
         while self.loop:  # Infinite loop if self.loop is True
@@ -79,7 +83,6 @@ class WavePlayerLoop(threading.Thread):
 
                 path = os.path.join(self.temp_dir, f"{slice}.wav")
                 if not os.path.exists(path):  # Check if slice exists
-                    print(f"Slice file missing: {path}")
                     continue
 
 
@@ -104,24 +107,27 @@ class WavePlayerLoop(threading.Thread):
                     wf.close()
 
         player.terminate()
-
+    
+    ## Play 
     def play(self):
-        print("playing")
         self.start()
 
+    ## Stop - removes tempdir if exits
     def stop(self):
         self.loop = False
         if self.is_alive():
             self.join()
         if os.path.exists(self.temp_dir):
             shutil.rmtree(self.temp_dir)
+    
 
+    ## Randomise the slice order
     def random(self,mast):
         random.shuffle(self.slices)
         mast.rand_helper(self.slices)
 
         
-
+    ## Function to aid in the math for slicing
     def get_audio_length(self):
         # Open the wave file
         with wave.open(self.filepath, 'rb') as wf:
@@ -133,8 +139,11 @@ class WavePlayerLoop(threading.Thread):
             duration = num_frames / float(frame_rate)
             
             return duration
-    
+
+## Tkinter class for the GUI
 class GUIObject:
+    
+
     def __init__(self, tkObject, master):
         self.master = master  # Assign master to access methods like play/stop
         self.master.tk = tkObject  # Store Tk instance for later use
@@ -162,7 +171,7 @@ class GUIObject:
         self.random_button = ttk.Button(self.master.tk, text="Random",command=self.random, bootstyle="primary")
         self.random_button.pack(pady=10)
 
-         # Create the grid of radio buttons
+        # Create the grid of radio buttons
         self.radio_vars = [
             IntVar(value=(col % self.num_slicers) + 1) for col in range(self.num_slices)
         ]
@@ -174,29 +183,31 @@ class GUIObject:
         # Configure the style for the selected state of the radio buttons
         self.master.tk.style.configure("TButton", background="#D1D8E0")
         self.master.tk.style.configure("TButton.selected", background="#6D9EC1", foreground="white")
-
+    
+    ## Play button for GUI to call play method in song
+    # Will also create new song object
     def play(self):
         if self.player is None or not self.player.is_alive():
             self.player = WavePlayerLoop("bassport_amen.wav", loop=True)
             self.player.play()
         else:
             print("Already playing.")
-
+    ## As above
     def stop(self):
         if self.player:
             self.player.stop()
             print("Audio stopped.")
 
+    ## As above
     def random(self):
         self.player.random(self)
 
+
     def rand_helper(self,grid):
-        print(self.radio_vars)
         for i, rad in enumerate(self.radio_vars):
             rad.set(grid[i]) 
 
     def create_radio_grid(self):
-        """Create a grid of radio buttons."""
         grid_frame = ttk.LabelFrame(self.master.tk, text="Select Slices:", padding=10)
         grid_frame.pack(pady=10)
 
@@ -218,12 +229,10 @@ class GUIObject:
     def on_radio_select(self, col):
         selected_row = self.radio_vars[col].get()
         self.player.slices[col] = selected_row
-        print(f"Column {col + 1}, selected Row: {selected_row}")
 
 
 def main():
     player = WavePlayerLoop("bassport_amen.wav", loop=True)
-    print(player.get_audio_length())
     root = Tk()
     gui = GUIObject(root, player)
     player.tk.mainloop()
