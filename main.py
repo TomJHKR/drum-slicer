@@ -2,7 +2,6 @@ import os
 import time
 import wave
 import shutil
-import tempfile
 import threading
 import sys
 
@@ -26,170 +25,161 @@ class WavePlayerLoop(threading.Thread):
     ## Class Init
     # filepath = filepath of sample
     # loop = loop boolean wether to loop or not
-    # tempdir = filepath of tempdir where slices are saved to
-    # slices = array of slices
-    # beats = amount of slices
-    def __init__(self,filepath,loop=True):
+    def __init__(self,filepath,gui,loop=True,num_slices=16):
         super(WavePlayerLoop, self).__init__()
+        self.gui = gui
         self.filepath = os.path.abspath(filepath)
         self.loop = loop
-        self.temp_dir = tempfile.mkdtemp()
-        self.slices = self.slice_audio(16)
-        self.beats = len(self.slices)
-    
-    ## Method to slice up the audio
-    ## Save to temp folder for each slice
-    ##
-    def slice_audio(self, num_slices):
-        slices = []
+        self.num_slices = num_slices
+        self.audio_length = self.get_audio_length()
+        self.slice_duration = self.audio_length / self.num_slices
+        self.current_order = list(range(self.num_slices))
+        self.running = threading.Event()
+        self.running.set()
+        self.default_order = [i for i in range(self.num_slices)]
+
+    ## Function to aid in the math for slicing
+    def get_audio_length(self):
+        # Open the wave file
         with wave.open(self.filepath, 'rb') as wf:
-            # Get audio properties
             num_frames = wf.getnframes()
-            framerate = wf.getframerate()
-            duration = num_frames / float(framerate)
+            frame_rate = wf.getframerate()
+            return num_frames / float(frame_rate)
 
-            slice_duration = duration / num_slices
-            slice_frames = int(slice_duration * framerate)
 
-            # Split the audio into slices
-            for i in range(num_slices):
-                # Set the start and end frames for each slice
-                start_frame = i * slice_frames
-                end_frame = (i + 1) * slice_frames if i < num_slices - 1 else num_frames
-
-                # Create a new wave file for this slice
-                slice_filepath = os.path.join(self.temp_dir, f"{i+1}.wav")
-                wf.setpos(start_frame)
-                frames = wf.readframes(end_frame - start_frame)
-
-                with wave.open(slice_filepath, 'wb') as slice_wf:
-                    slice_wf.setnchannels(wf.getnchannels())
-                    slice_wf.setsampwidth(wf.getsampwidth())
-                    slice_wf.setframerate(wf.getframerate())
-                    slice_wf.writeframes(frames)
-                slices.append(i+1)
-
-        return slices
-    
-
-    ## Initial play button
     def run(self):
-        player = pyaudio.PyAudio()
+        print("Running")
+        print(self.gui)
+        with wave.open(self.filepath, 'rb') as wf:
+            player = pyaudio.PyAudio()
+            stream = player.open(
+                format=player.get_format_from_width(wf.getsampwidth()),
+                channels=wf.getnchannels(),
+                rate=wf.getframerate(),
+                output=True
+            )
+            while self.loop:
+                for col,slice_index in enumerate(self.current_order):
+                    if self.gui:
+                        self.gui.highlight_current(col)
+                    if not self.running.is_set():
+                        break
+                    start_time = slice_index * self.slice_duration
+                    start_frame = int(start_time * wf.getframerate())
+                    wf.setpos(start_frame)
+                    frames_to_read = int(self.slice_duration * wf.getframerate())
+                    self.play_slice(wf, stream, frames_to_read)
+                    if not self.loop:
+                        break
+            stream.stop_stream()
+            stream.close()
+            player.terminate()
 
-        while self.loop:  # Infinite loop if self.loop is True
-            for slice in self.slices:
-                if not self.loop:
-                    break
+    def play_slice(self, wf, stream, frames_to_read):
+        while frames_to_read > 0 and self.running.is_set():
+            data = wf.readframes(min(self.CHUNK, frames_to_read))
+            if not data:
+                break
+            stream.write(data)
+            frames_to_read -= self.CHUNK
 
-                path = os.path.join(self.temp_dir, f"{slice}.wav")
-                if not os.path.exists(path):  # Check if slice exists
-                    continue
-
-
-                wf = wave.open(path, 'rb')
-
-                # Open Output Stream
-                stream = player.open(format=player.get_format_from_width(wf.getsampwidth()),
-                                     channels=wf.getnchannels(),
-                                     rate=wf.getframerate(),
-                                     output=True)
-
-                try:
-                    # Read and play the frames
-                    data = wf.readframes(self.CHUNK)
-                    while data and self.loop:
-                        stream.write(data)
-                        data = wf.readframes(self.CHUNK)
-                finally:
-                    # Ensure proper cleanup of resources
-                    stream.stop_stream()
-                    stream.close()
-                    wf.close()
-
-        player.terminate()
-    
     ## Play 
     def play(self):
         self.start()
 
     ## Stop - removes tempdir if exits
     def stop(self):
+        self.running.clear()
         self.loop = False
         if self.is_alive():
             self.join()
-        if os.path.exists(self.temp_dir):
-            shutil.rmtree(self.temp_dir)
     
 
     ## Randomise the slice order
-    def random(self,mast):
-        random.shuffle(self.slices)
-        mast.rand_helper(self.slices)
+    def random(self,gui):
+        random_array = [random.randint(0, self.num_slices - 1) for _ in range(self.num_slices)]
+        self.current_order = random_array
+        gui.update_slice_order(self.current_order)
 
         
-    ## Function to aid in the math for slicing
-    def get_audio_length(self):
-        # Open the wave file
-        with wave.open(self.filepath, 'rb') as wf:
-            # Get the number of frames and the frame rate
-            num_frames = wf.getnframes()
-            frame_rate = wf.getframerate()
-            
-            # Calculate the duration of the audio in seconds
-            duration = num_frames / float(frame_rate)
-            
-            return duration
+
 
 ## Tkinter class for the GUI
 class GUIObject:
     
 
-    def __init__(self, tkObject, master):
-        self.master = master  # Assign master to access methods like play/stop
-        self.master.tk = tkObject  # Store Tk instance for later use
-        self.num_slices = 16
-        self.num_slicers = 16
+    def __init__(self, tkObject):
+        self.master = tkObject  # Store Tk instance for later use
+        #self.setup_styles()
+        self.player = WavePlayerLoop("bassport_amen.wav", self,loop=True)
+        self.master.style = ttk.Style()
+        self.master.style.theme_use("superhero")
+
+        ##
+        self.num_slices = self.player.num_slices
         
-        self.master.tk.style = ttk.Style()
-        self.master.tk.style.theme_use("superhero")
 
         # Label to show GUI content
-        self.label = ttk.Label(self.master.tk, text="Slice Control")
+        self.label = ttk.Label(self.master, text="Slice Control")
         self.label.pack(pady=10)
 
+        self.slice_boxes = ttk.Entry(self.master)
+        self.slice_boxes.insert(0, str(self.num_slices))  # Pre-fill with the default value
+        self.slice_boxes.pack(pady=10)
 
+        # Button to update the number of slices
+        self.update_button = ttk.Button(self.master, text="Update Slices", command=self.update_slices)
+        self.update_button.pack(pady=10)
 
         # Play button will call the 'play' method of master (WavePlayerLoop)
-        self.play_button = ttk.Button(self.master.tk, text="Play", command=self.play, bootstyle="success")
+        self.play_button = ttk.Button(self.master, text="Play", command=self.play, bootstyle="success")
         self.play_button.pack(pady=10)
 
         # Stop button will call the 'stop' method of master (WavePlayerLoop)
-        self.stop_button = ttk.Button(self.master.tk, text="Stop", command=self.stop, bootstyle="danger")
+        self.stop_button = ttk.Button(self.master, text="Stop", command=self.stop, bootstyle="danger")
         self.stop_button.pack(pady=10)
 
         # Randomise button
-        self.random_button = ttk.Button(self.master.tk, text="Random",command=self.random, bootstyle="primary")
+        self.random_button = ttk.Button(self.master, text="Random",command=self.random, bootstyle="primary")
         self.random_button.pack(pady=10)
 
         # Create the grid of radio buttons
         self.radio_vars = [
-            IntVar(value=(col % self.num_slicers) + 1) for col in range(self.num_slices)
+            IntVar(value=(col % self.num_slices) + 1) for col in range(self.num_slices)
         ]
         self.create_radio_grid()
 
         # Store the current player instance
         self.player = None
+
+    def update_slices(self):
+        # Get the new number of slices from the Entry widget
+        try:
+            new_num_slices = int(self.slice_boxes.get())
+            if new_num_slices != self.num_slices:
+                self.num_slices = new_num_slices
+                #self.player.num_slices = self.num_slices
+                self.radio_vars = [
+                    IntVar(value=(col % self.num_slices) + 1) for col in range(self.num_slices)
+                ]
+                self.create_radio_grid()
+                self.play(new_num_slices)
+
+        except ValueError:
+            print("Please enter a valid number.")
+
     def setup_styles(self):
         # Configure the style for the selected state of the radio buttons
-        self.master.tk.style.configure("TButton", background="#D1D8E0")
-        self.master.tk.style.configure("TButton.selected", background="#6D9EC1", foreground="white")
-    
+        self.master.style.configure("TRadiobutton", background="#D1D8E0")
+        self.master.style.configure("TRadioutton.selected", background="#6D9EC1", foreground="white")
+        self.master.style.configure("TRadiobutton.highlighted", background="#FFFF99", foreground="white") 
     ## Play button for GUI to call play method in song
     # Will also create new song object
-    def play(self):
+    def play(self,num_slices=16):
         if self.player is None or not self.player.is_alive():
-            self.player = WavePlayerLoop("bassport_amen.wav", loop=True)
+            self.player = WavePlayerLoop("bassport_amen.wav",self, loop=True,num_slices=num_slices)
             self.player.play()
+            self.update_slice_order(self.player.default_order)
         else:
             print("Already playing.")
     ## As above
@@ -208,34 +198,67 @@ class GUIObject:
             rad.set(grid[i]) 
 
     def create_radio_grid(self):
-        grid_frame = ttk.LabelFrame(self.master.tk, text="Select Slices:", padding=10)
+        if hasattr(self, 'grid_frame'):
+            self.grid_frame.destroy()
+
+        grid_frame = ttk.LabelFrame(self.master, text="Select Slices:", padding=10)
         grid_frame.pack(pady=10)
+        self.radio_buttons = []
 
         for col in range(self.num_slices):
+            
             # Add a label for each column
             Label(grid_frame, text=f"{col + 1}").grid(row=0, column=col)
-
+            #separator = ttk.Separator(grid_frame, orient=VERTICAL)
+            #separator.grid(row=0, column=col, rowspan=self.num_slices, sticky="nsw", padx=5)
+     
             # Create radio buttons for each row in the column
-            for row in range(self.num_slicers, 0, -1):
-                rb = Radiobutton(
+            for row in range(self.num_slices, 0, -1):
+                rb = ttk.Radiobutton(
                     grid_frame,
                     variable=self.radio_vars[col],
                     value=row,
-                    indicatoron=True,
-                    command=lambda c=col: self.on_radio_select(c),
+                    #indicatoron=True,
+                    #borderwidth=0,
+                    #relief="flat",
+                    command=lambda c=col: self.update_slice_order_from_gui(c),
                 )
-                rb.grid(row=self.num_slicers - row + 1, column=col, sticky="w",pady=2)
+                rb.grid(row=self.num_slices - row + 1, column=col, sticky="w",pady=1,padx=5)
+                self.radio_buttons.append(rb)
+                  # Add a separator after each column except the last one
+            self.grid_frame = grid_frame
 
     def on_radio_select(self, col):
         selected_row = self.radio_vars[col].get()
         self.player.slices[col] = selected_row
 
+    def update_slice_order_from_gui(self, col):
+        self.player.current_order = [var.get() - 1 for var in self.radio_vars]
+
+    def update_slice_order(self, new_order):
+        for i, new_val in enumerate(new_order):
+            self.radio_vars[i].set(new_val + 1)
+
+    def highlight_current(self,col):
+        label = self.grid_frame.grid_slaves(row=0,column=col)[0]
+        label.config(fg="black",bg="#FFFF99")
+        prev = 0
+        if col < self.num_slices and col > 0:
+            prev = col - 1
+        elif col == 0:
+            prev = self.num_slices-1
+        elif col == self.num_slices:
+            prev = 0
+        label2 = self.grid_frame.grid_slaves(row=0,column=prev)[0]
+        label2.config(fg="white",bg="#2b3e50")
+     
+        
 
 def main():
-    player = WavePlayerLoop("bassport_amen.wav", loop=True)
+    #player = WavePlayerLoop("bassport_amen.wav", loop=True)
     root = Tk()
-    gui = GUIObject(root, player)
-    player.tk.mainloop()
+    gui = GUIObject(root)
+    root.mainloop()
 
 
 if __name__ == "__main__":
